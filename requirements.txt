@@ -11,3 +11,4 @@ torchvision
 langchain-community
 langchain-core
 protobuf<=3.20.3
+packaging

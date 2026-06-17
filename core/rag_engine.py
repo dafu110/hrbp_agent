@@ -1,72 +1,90 @@
-import os
-from dotenv import load_dotenv
+from functools import lru_cache
+from typing import List, Tuple
+
 from langchain_community.document_loaders import PyPDFLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
-from langchain_openai import ChatOpenAI
+from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-load_dotenv()
+from .config import get_chat_model, get_settings
 
-# 全局初始化，避免每次提问都重新加载切分文档
-embedding_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-pdf_path = "data/员工手册测试版.pdf"
 
-if os.path.exists(pdf_path):
-    loader = PyPDFLoader(pdf_path)
-    # 切小一点，保证精度
-    splits = RecursiveCharacterTextSplitter(chunk_size=400, chunk_overlap=40).split_documents(loader.load())
-    vectorstore = Chroma.from_documents(documents=splits, embedding=embedding_model)
-    global_retriever = vectorstore.as_retriever(search_kwargs={"k": 2})
-else:
-    global_retriever = None
+def _source_label(doc: Document) -> str:
+    settings = get_settings()
+    page_num = int(doc.metadata.get("page", 0)) + 1
+    return f"《{settings.policy_pdf_path.name}》第 {page_num} 页"
+
+
+@lru_cache(maxsize=1)
+def _build_retriever():
+    settings = get_settings()
+    if not settings.policy_pdf_path.exists():
+        return None
+
+    loader = PyPDFLoader(str(settings.policy_pdf_path))
+    documents = loader.load()
+    if not documents:
+        return None
+
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=settings.rag_chunk_size,
+        chunk_overlap=settings.rag_chunk_overlap,
+    )
+    splits = splitter.split_documents(documents)
+    embeddings = HuggingFaceEmbeddings(model_name=settings.embedding_model)
+    vectorstore = Chroma.from_documents(documents=splits, embedding=embeddings)
+    return vectorstore.as_retriever(search_kwargs={"k": settings.rag_top_k})
+
+
+def retrieve_policy_context(question: str) -> Tuple[str, List[str]]:
+    retriever = _build_retriever()
+    if retriever is None:
+        settings = get_settings()
+        raise FileNotFoundError(f"未找到企业知识库文件：{settings.policy_pdf_path}")
+
+    docs = retriever.invoke(question)
+    if not docs:
+        return "", []
+
+    context_parts = []
+    sources = []
+    for index, doc in enumerate(docs, start=1):
+        context_parts.append(f"[片段{index} | {_source_label(doc)}]\n{doc.page_content}")
+        sources.append(_source_label(doc))
+
+    return "\n\n".join(context_parts), sorted(set(sources))
+
 
 def ask_rag(question: str) -> str:
-    if global_retriever is None or not os.path.exists(pdf_path):
-        return "⚠️ 错误：未找到 data/员工手册测试版.pdf，请检查路径。"
-        
     try:
-        # 1. 检索阶段
-        docs = global_retriever.invoke(question)
-        
-        # 2. 提取阶段（获取内容及 Metadata 中的页码信息）
-        sources_info = []
-        context_text = ""
-        for i, doc in enumerate(docs):
-            page_num = doc.metadata.get("page", 0) + 1 
-            context_text += f"[片段{i+1}]: {doc.page_content}\n"
-            sources_info.append(f"《员工手册测试版.pdf》第 {page_num} 页")
-            
-        sources_info = list(set(sources_info))
+        context_text, sources = retrieve_policy_context(question)
+        if not context_text:
+            return "未在企业知识库中检索到相关内容，请补充制度文档后再试。"
 
-        # 3. 生成阶段
-        llm = ChatOpenAI(
-            model="deepseek-chat", 
-            api_key=os.getenv("OPENAI_API_KEY"),
-            base_url=os.getenv("OPENAI_API_BASE"),
-            temperature=0.1
+        llm = get_chat_model(temperature=0.1)
+        template = """你是一个严谨的企业 HRBP 助手。请完全基于【参考文档】回答员工问题。
+如果参考文档没有相关信息，请明确说明“文档中未找到相关规定”，不要编造。
+
+【参考文档】
+{context}
+
+【员工问题】
+{question}
+"""
+        prompt = ChatPromptTemplate.from_template(template).format(
+            context=context_text,
+            question=question,
         )
-        
-        template = """你是一个严谨的企业人事HR大管家。请完全基于【参考文档】回答员工的问题。
-        如果文档中没有相关信息，请诚实回答无法找到相关规定。
-        
-        【参考文档】：
-        {context}
-        
-        员工提问：{question}
-        """
-        prompt = ChatPromptTemplate.from_template(template).format(context=context_text, question=question)
         response = llm.invoke(prompt)
-        
-        # 4. 组装阶段（强行拼接溯源标记返回给前端展示）
-        sources_markdown = "\n".join([f" - 📄 {src}" for src in sources_info])
-        final_output = f"""{response.content}
+
+        sources_markdown = "\n".join([f"- {source}" for source in sources])
+        return f"""{response.content}
 
 ---
-#### 🔍 官方规章参考依据：
+#### 参考依据
 {sources_markdown}
 """
-        return final_output
-    except Exception as e:
-        return f"企业级 RAG 检索失败: {str(e)}"
+    except Exception as exc:
+        return f"企业知识库检索失败：{exc}"
