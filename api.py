@@ -1,7 +1,10 @@
+from contextlib import asynccontextmanager
 from typing import List, Optional
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi.responses import JSONResponse
+from starlette.requests import Request
 from pydantic import BaseModel, Field
 
 from core.auth import Principal, allowed_permissions, authenticate_with_password, require_permission
@@ -11,7 +14,15 @@ from core.workflow import agent_app
 
 
 settings = get_settings()
-app = FastAPI(title=settings.app_name, version="0.2.0")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    yield
+
+
+app = FastAPI(title=settings.app_name, version="0.2.0", lifespan=lifespan)
 
 
 class ChatRequest(BaseModel):
@@ -37,9 +48,9 @@ def current_principal(x_access_password: Optional[str] = Header(default=None)) -
     return principal
 
 
-@app.on_event("startup")
-def startup() -> None:
-    init_db()
+@app.exception_handler(PermissionError)
+def permission_error_handler(request: Request, exc: PermissionError) -> JSONResponse:
+    return JSONResponse(status_code=403, content={"detail": str(exc)})
 
 
 @app.get("/health")
@@ -83,7 +94,7 @@ def chat(request: ChatRequest, principal: Principal = Depends(current_principal)
 
 @app.get("/interviews")
 def interviews(
-    limit: int = 20,
+    limit: int = Query(default=20, ge=1, le=100),
     principal: Principal = Depends(current_principal),
 ) -> list[dict]:
     require_permission(principal, "tool")

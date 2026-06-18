@@ -132,6 +132,24 @@ def retrieve_policy_context(question: str) -> Tuple[str, List[str]]:
     return "\n\n".join(context_parts), sorted(set(sources))
 
 
+def retrieve_policy_evidence(question: str) -> List[Dict[str, str]]:
+    retriever = _build_retriever()
+    if retriever is None:
+        return []
+
+    docs = retriever.invoke(question)
+    evidence = []
+    for doc in docs:
+        snippet = " ".join(doc.page_content.split())
+        evidence.append(
+            {
+                "source": _source_label(doc),
+                "snippet": snippet[:500],
+            }
+        )
+    return evidence
+
+
 def ask_rag(question: str) -> str:
     try:
         context_text, sources = retrieve_policy_context(question)

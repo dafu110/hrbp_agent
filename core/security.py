@@ -1,6 +1,7 @@
 import hashlib
 import re
-from typing import Dict, Iterable, List
+import secrets
+from typing import Any, Dict, Iterable, List
 
 
 PHONE_RE = re.compile(r"(?<!\d)(?:\+?86[-\s]?)?1[3-9]\d{9}(?!\d)")
@@ -28,10 +29,28 @@ def redact_messages(messages: Iterable[Dict[str, str]]) -> List[Dict[str, str]]:
     ]
 
 
+def redact_payload(value: Any) -> Any:
+    if isinstance(value, str):
+        return redact_pii(value)
+    if isinstance(value, dict):
+        return {key: redact_payload(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [redact_payload(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(redact_payload(item) for item in value)
+    return value
+
+
+def hash_password(password: str) -> str:
+    return "sha256:" + hashlib.sha256(password.encode("utf-8")).hexdigest()
+
+
 def verify_password(input_password: str, expected_password: str | None) -> bool:
     if not expected_password:
         return True
-    return input_password == expected_password
+    if expected_password.startswith("sha256:"):
+        return secrets.compare_digest(hash_password(input_password), expected_password)
+    return secrets.compare_digest(input_password, expected_password)
 
 
 def stable_hash(value: str) -> str:

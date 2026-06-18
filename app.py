@@ -6,7 +6,8 @@ import streamlit as st
 from core.audit import write_audit_event
 from core.config import get_settings
 from core.database import init_db, list_interview_actions
-from core.pdf_utils import extract_pdf_text
+from core.pdf_utils import extract_document_text
+from core.rag_engine import retrieve_policy_evidence
 from core.security import stable_hash, verify_password
 from core.workflow import agent_app
 
@@ -14,16 +15,36 @@ from core.workflow import agent_app
 settings = get_settings()
 init_db()
 st.set_page_config(page_title=settings.app_name, page_icon="💼", layout="wide")
-st.title(f"💼 {settings.app_name}")
+st.markdown(
+    """
+    <style>
+    .block-container {padding-top: 1.6rem; max-width: 1180px;}
+    div[data-testid="stMetric"] {
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+        padding: 12px 14px;
+    }
+    section[data-testid="stSidebar"] {
+        border-right: 1px solid #e5e7eb;
+    }
+    .small-muted {color: #6b7280; font-size: 0.88rem;}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+st.title(settings.app_name)
+st.caption("HRBP Agent 工作台：制度问答、简历/JD 匹配、面试邀约与审计留痕")
 
 
 @st.cache_data(show_spinner=False)
-def cached_extract_pdf_text(file_bytes: bytes) -> str:
-    return extract_pdf_text(file_bytes)
+def cached_extract_document_text(file_bytes: bytes, filename: str) -> str:
+    return extract_document_text(file_bytes, filename)
 
 
 def init_state() -> None:
     st.session_state.setdefault("extracted_resume_text", "")
+    st.session_state.setdefault("resume_file_names", [])
     st.session_state.setdefault("thread_id", f"peopleops_session_{uuid4().hex[:8]}")
     st.session_state.setdefault("authenticated", not bool(settings.access_password))
     st.session_state.setdefault(
@@ -70,34 +91,47 @@ init_state()
 require_access()
 
 with st.sidebar:
-    st.header("工作台")
-    st.caption(f"会话：{st.session_state['thread_id']}")
-    st.caption(f"工具模式：{settings.tool_execution_mode}")
-    st.caption(f"向量库：{settings.chroma_persist_dir.name}")
-    st.caption(f"审计日志：{settings.audit_log_path.name}")
+    st.header("候选人与上下文")
+    uploaded_resumes = st.file_uploader(
+        "导入简历文件",
+        type=["pdf", "docx", "txt", "md"],
+        accept_multiple_files=True,
+        help="支持 PDF、Word DOCX、TXT、Markdown，可一次导入多份候选人材料。",
+    )
 
-    uploaded_resume = st.file_uploader("上传候选人简历（PDF）", type=["pdf"])
-
-    if uploaded_resume is not None:
+    if uploaded_resumes:
         try:
+            extracted_parts = []
+            file_names = []
             with st.spinner("正在提取简历文本..."):
-                text_content = cached_extract_pdf_text(uploaded_resume.getvalue())
-            st.session_state["extracted_resume_text"] = text_content
-            if text_content:
+                for uploaded_resume in uploaded_resumes:
+                    text_content = cached_extract_document_text(
+                        uploaded_resume.getvalue(),
+                        uploaded_resume.name,
+                    )
+                    if text_content:
+                        file_names.append(uploaded_resume.name)
+                        extracted_parts.append(f"【文件：{uploaded_resume.name}】\n{text_content}")
+
+            combined_text = "\n\n".join(extracted_parts).strip()
+            st.session_state["extracted_resume_text"] = combined_text
+            st.session_state["resume_file_names"] = file_names
+            if combined_text:
                 write_audit_event(
                     "resume.uploaded",
                     {
                         "session_id": st.session_state["thread_id"],
-                        "filename": uploaded_resume.name,
-                        "content_hash": stable_hash(text_content),
-                        "char_count": len(text_content),
+                        "filenames": file_names,
+                        "content_hash": stable_hash(combined_text),
+                        "char_count": len(combined_text),
                     },
                 )
-                st.success("简历文本提取成功")
+                st.success(f"已导入 {len(file_names)} 个文件")
             else:
-                st.warning("PDF 未提取到可用文本，可能是扫描件或图片型简历。")
+                st.warning("未提取到可用文本，可能是扫描件、图片型简历或空文件。")
         except Exception as exc:
             st.session_state["extracted_resume_text"] = ""
+            st.session_state["resume_file_names"] = []
             write_audit_event(
                 "resume.upload_failed",
                 {"session_id": st.session_state["thread_id"], "error": str(exc)},
@@ -105,6 +139,7 @@ with st.sidebar:
             st.error(f"简历解析失败：{exc}")
     else:
         st.session_state["extracted_resume_text"] = ""
+        st.session_state["resume_file_names"] = []
 
     jd_input = st.text_area(
         "岗位描述（JD）",
@@ -112,9 +147,12 @@ with st.sidebar:
         placeholder="粘贴岗位职责、任职要求、技术栈、年限要求等信息...",
     )
 
+    if st.session_state["extracted_resume_text"]:
+        with st.expander("简历文本预览", expanded=False):
+            st.text(st.session_state["extracted_resume_text"][:3000])
+
     st.divider()
-    st.subheader("运行检查")
-    st.caption(f"知识库：{settings.policy_pdf_path.name}")
+    st.subheader("运行状态")
     if not settings.policy_pdf_path.exists():
         st.warning("未找到企业知识库 PDF，请检查 HR_POLICY_PDF 配置。")
     if not settings.has_llm_config:
@@ -125,12 +163,35 @@ with st.sidebar:
         st.warning("访问控制未开启，可配置 ACCESS_PASSWORD。")
 
     st.divider()
+    st.subheader("知识库引用预检")
+    preview_question = st.text_input("检索问题", placeholder="例如：出差报销有什么标准？")
+    if st.button("预览引用", use_container_width=True) and preview_question.strip():
+        evidence = retrieve_policy_evidence(preview_question.strip())
+        if evidence:
+            for item in evidence:
+                st.caption(item["source"])
+                st.write(item["snippet"])
+        else:
+            st.warning("未检索到引用片段。")
+
+    st.divider()
     st.subheader("最近工具动作")
     for action in list_interview_actions(limit=5):
         st.caption(
             f"#{action['id']} {action['status']} | {action['candidate_name']} | {action['interview_time']}"
         )
 
+status_cols = st.columns(4)
+with status_cols[0]:
+    st.metric("会话", st.session_state["thread_id"])
+with status_cols[1]:
+    st.metric("简历文件", len(st.session_state["resume_file_names"]))
+with status_cols[2]:
+    st.metric("工具模式", settings.tool_execution_mode)
+with status_cols[3]:
+    st.metric("知识库", settings.policy_pdf_path.name)
+
+st.divider()
 
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):

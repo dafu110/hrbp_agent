@@ -33,12 +33,15 @@ Runtime state is mounted into:
 - `.runtime/audit/events.jsonl`
 - `.runtime/email_drafts/`
 - `.runtime/calendar/`
+- `.runtime/ats_exports/`
 - `.chroma/policy/`
 
 ## Production Checklist
 
 - Configure `ACCESS_PASSWORD`.
+- Prefer `sha256:<hash>` access passwords for shared demos; plain text remains supported for local convenience.
 - Keep `.env` outside source control.
 - Persist `.runtime` and `.chroma`.
 - Rotate audit logs.
-- Replace local email/calendar artifacts with enterprise SMTP, calendar, and ATS adapters when credentials are available.
+- Use `TOOL_EXECUTION_MODE=live` with SMTP settings only in controlled environments.
+- Replace local calendar artifacts and the file-based ATS adapter with enterprise calendar and ATS APIs when credentials are available.

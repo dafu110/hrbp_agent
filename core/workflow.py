@@ -48,9 +48,13 @@ RESUME_KEYWORDS = [
 
 
 @tool
-def schedule_interview_tool(candidate_name: str, interview_time: str) -> str:
-    """当用户要求安排面试、发送面试邀约或通知候选人时调用。"""
-    return schedule_interview(candidate_name, interview_time).to_markdown()
+def schedule_interview_tool(candidate_name: str, interview_time: str, candidate_email: str = "") -> str:
+    """当用户要求安排面试、发送面试邀约或通知候选人时调用，可提取候选人邮箱。"""
+    return schedule_interview(
+        candidate_name,
+        interview_time,
+        candidate_email=candidate_email or None,
+    ).to_markdown()
 
 
 def keyword_intent(text: str) -> Intent:
@@ -175,7 +179,7 @@ def handle_action_tool(state: AgentState):
         llm = get_chat_model(temperature=0.0)
         llm_with_tools = llm.bind_tools([schedule_interview_tool])
         ai_msg = llm_with_tools.invoke(
-            f"用户当前说的话：{redact_pii(user_msg)}。如果需要发面试邀约，请提取候选人姓名和面试时间并调用工具。"
+            f"用户当前说的话：{redact_pii(user_msg)}。如果需要发面试邀约，请提取候选人姓名、邮箱和面试时间并调用工具。"
         )
 
         if ai_msg.tool_calls:
