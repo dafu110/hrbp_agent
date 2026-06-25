@@ -1,4 +1,5 @@
 import contextvars
+import copy
 import hashlib
 import json
 from datetime import datetime, timezone
@@ -96,3 +97,56 @@ def read_audit_events(limit: int = 50) -> List[Dict[str, Any]]:
             except json.JSONDecodeError:
                 events.append({"event_type": "audit.corrupt_line", "raw": line.strip()[:200]})
     return events[-limit:]
+
+
+def verify_audit_integrity() -> Dict[str, Any]:
+    settings = get_settings()
+    if not settings.audit_log_path.exists():
+        return {"valid": True, "total_events": 0, "errors": [], "last_event_hash": None}
+
+    errors: List[Dict[str, Any]] = []
+    previous_hash: str | None = None
+    total = 0
+    with settings.audit_log_path.open("r", encoding="utf-8") as file:
+        for line_number, line in enumerate(file, start=1):
+            if not line.strip():
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError as exc:
+                errors.append({"line": line_number, "error": f"invalid_json: {exc}"})
+                continue
+
+            total += 1
+            expected_previous = event.get("previous_event_hash")
+            if expected_previous != previous_hash:
+                errors.append(
+                    {
+                        "line": line_number,
+                        "error": "previous_event_hash_mismatch",
+                        "expected": previous_hash,
+                        "actual": expected_previous,
+                    }
+                )
+
+            event_hash = event.get("event_hash")
+            event_for_hash = copy.deepcopy(event)
+            event_for_hash.pop("event_hash", None)
+            expected_hash = _hash_event(event_for_hash)
+            if event_hash != expected_hash:
+                errors.append(
+                    {
+                        "line": line_number,
+                        "error": "event_hash_mismatch",
+                        "expected": expected_hash,
+                        "actual": event_hash,
+                    }
+                )
+            previous_hash = event_hash
+
+    return {
+        "valid": not errors,
+        "total_events": total,
+        "errors": errors,
+        "last_event_hash": previous_hash,
+    }

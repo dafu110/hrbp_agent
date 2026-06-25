@@ -1,4 +1,6 @@
 from contextlib import asynccontextmanager
+from collections import defaultdict, deque
+import time
 from typing import List, Optional
 from uuid import uuid4
 
@@ -8,12 +10,13 @@ from starlette.requests import Request
 from pydantic import BaseModel, Field
 
 from core.auth import Principal, allowed_permissions, authenticate_with_password, require_permission
-from core.audit import clear_audit_context, read_audit_events, set_audit_context, write_audit_event
+from core.audit import clear_audit_context, read_audit_events, set_audit_context, verify_audit_integrity, write_audit_event
 from core.config import enterprise_warnings, get_settings
 from core.database import init_db, list_interview_actions
 
 
 settings = get_settings()
+rate_buckets: dict[str, deque[float]] = defaultdict(deque)
 
 
 @asynccontextmanager
@@ -23,6 +26,20 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, version="0.2.0", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    if settings.api_rate_limit_per_minute > 0:
+        client = request.client.host if request.client else "unknown"
+        bucket = rate_buckets[client]
+        now = time.time()
+        while bucket and now - bucket[0] > 60:
+            bucket.popleft()
+        if len(bucket) >= settings.api_rate_limit_per_minute:
+            return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded"})
+        bucket.append(now)
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -38,9 +55,9 @@ async def audit_context_middleware(request: Request, call_next):
 
 
 class ChatRequest(BaseModel):
-    message: str
-    jd_text: str = ""
-    resume_text: str = ""
+    message: str = Field(..., min_length=1, max_length=8_000)
+    jd_text: str = Field(default="", max_length=80_000)
+    resume_text: str = Field(default="", max_length=80_000)
     history: List[dict] = Field(default_factory=list)
     thread_id: Optional[str] = None
 
@@ -82,6 +99,7 @@ def permission_error_handler(request: Request, exc: PermissionError) -> JSONResp
 
 @app.get("/health")
 def health() -> dict:
+    warnings = enterprise_warnings(settings)
     return {
         "status": "ok",
         "app_name": settings.app_name,
@@ -90,8 +108,22 @@ def health() -> dict:
         "enterprise_mode": settings.enterprise_mode,
         "access_password_required": settings.require_access_password,
         "audit_hash_chain_enabled": settings.audit_hash_chain_enabled,
-        "enterprise_warnings": enterprise_warnings(settings),
+        "api_rate_limit_per_minute": settings.api_rate_limit_per_minute,
+        "enterprise_warnings": warnings,
     }
+
+
+@app.get("/readiness")
+def readiness() -> JSONResponse:
+    warnings = enterprise_warnings(settings)
+    integrity = verify_audit_integrity()
+    ready = not warnings and bool(integrity.get("valid"))
+    payload = {
+        "ready": ready,
+        "enterprise_warnings": warnings,
+        "audit_integrity": integrity,
+    }
+    return JSONResponse(status_code=200 if ready else 503, content=payload)
 
 
 @app.get("/me")
@@ -148,3 +180,9 @@ def audit_events(
 ) -> list[dict]:
     require_permission(principal, "audit")
     return read_audit_events(limit=limit)
+
+
+@app.get("/audit/integrity")
+def audit_integrity(principal: Principal = Depends(current_principal)) -> dict:
+    require_permission(principal, "audit")
+    return verify_audit_integrity()

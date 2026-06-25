@@ -27,7 +27,8 @@ jobs:
           python -m py_compile \
             api.py app.py \
             core/config.py core/auth.py core/database.py core/security.py \
-            core/audit.py core/tools.py core/pdf_utils.py core/matcher.py
+            core/audit.py core/tools.py core/pdf_utils.py core/matcher.py \
+            scripts/hash_password.py
 
       - name: Run core unit tests
         run: python -m unittest discover -s tests

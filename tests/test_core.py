@@ -1,17 +1,18 @@
 import os
 import importlib
+import json
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from core.audit import read_audit_events, write_audit_event
+from core.audit import read_audit_events, verify_audit_integrity, write_audit_event
 from core.auth import Principal, has_permission
 from core.config import enterprise_warnings, get_settings
 from core.database import list_interview_actions
 from core.matcher import normalize_analysis
 from core.pdf_utils import extract_document_text
-from core.security import redact_payload, redact_pii, verify_password
+from core.security import hash_password, redact_payload, redact_pii, verify_password
 from core.tools import parse_interview_window, schedule_interview
 
 
@@ -75,6 +76,7 @@ class IsolatedRuntimeMixin:
                 "ACCESS_PASSWORD",
                 "ACCESS_PASSWORD_MIN_LENGTH",
                 "AUDIT_HASH_CHAIN_ENABLED",
+                "API_RATE_LIMIT_PER_MINUTE",
             )
         }
         root = Path(self._tmpdir.name)
@@ -89,6 +91,7 @@ class IsolatedRuntimeMixin:
         os.environ.pop("ACCESS_PASSWORD", None)
         os.environ.pop("ACCESS_PASSWORD_MIN_LENGTH", None)
         os.environ.pop("AUDIT_HASH_CHAIN_ENABLED", None)
+        os.environ.pop("API_RATE_LIMIT_PER_MINUTE", None)
         get_settings.cache_clear()
 
     def tearDown(self):
@@ -150,6 +153,19 @@ class AuditTests(IsolatedRuntimeMixin, unittest.TestCase):
         self.assertEqual(events[0]["payload"]["email"], "[EMAIL_REDACTED]")
         self.assertEqual(events[1]["payload"]["phone"], "[PHONE_REDACTED]")
 
+    def test_audit_integrity_detects_tampering(self):
+        write_audit_event("test.first", {"email": "test@example.com"})
+        self.assertTrue(verify_audit_integrity()["valid"])
+
+        audit_path = get_settings().audit_log_path
+        events = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
+        events[0]["payload"]["email"] = "tampered@example.com"
+        audit_path.write_text(json.dumps(events[0], ensure_ascii=False) + "\n", encoding="utf-8")
+
+        result = verify_audit_integrity()
+        self.assertFalse(result["valid"])
+        self.assertEqual(result["errors"][0]["error"], "event_hash_mismatch")
+
 
 class AuthorizationTests(unittest.TestCase):
     def test_role_permissions(self):
@@ -173,6 +189,14 @@ class ApiControlPlaneTests(IsolatedRuntimeMixin, unittest.TestCase):
             self.assertEqual(audit.status_code, 200)
             self.assertEqual(audit.json(), [])
 
+            integrity = client.get("/audit/integrity")
+            self.assertEqual(integrity.status_code, 200)
+            self.assertTrue(integrity.json()["valid"])
+
+            readiness = client.get("/readiness")
+            self.assertEqual(readiness.status_code, 200)
+            self.assertTrue(readiness.json()["ready"])
+
     def test_chat_returns_service_error_when_agent_runtime_is_missing(self):
         from fastapi import HTTPException
         from fastapi.testclient import TestClient
@@ -188,6 +212,44 @@ class ApiControlPlaneTests(IsolatedRuntimeMixin, unittest.TestCase):
             api.get_agent_app = original_get_agent_app
 
         self.assertEqual(response.status_code, 503)
+
+    def test_chat_request_validation_limits_empty_message(self):
+        from fastapi import HTTPException
+        from fastapi.testclient import TestClient
+        import api
+
+        api = importlib.reload(api)
+        original_get_agent_app = api.get_agent_app
+        api.get_agent_app = lambda: (_ for _ in ()).throw(HTTPException(status_code=503, detail="Agent runtime unavailable"))
+        try:
+            with TestClient(api.app) as client:
+                response = client.post("/chat", json={"message": ""})
+        finally:
+            api.get_agent_app = original_get_agent_app
+
+        self.assertEqual(response.status_code, 422)
+
+    def test_api_rate_limit_can_be_enforced(self):
+        from fastapi.testclient import TestClient
+        import api
+
+        os.environ["API_RATE_LIMIT_PER_MINUTE"] = "2"
+        get_settings.cache_clear()
+        api = importlib.reload(api)
+        with TestClient(api.app) as client:
+            self.assertEqual(client.get("/health").status_code, 200)
+            self.assertEqual(client.get("/health").status_code, 200)
+            self.assertEqual(client.get("/health").status_code, 429)
+
+
+class PasswordHashingTests(unittest.TestCase):
+    def test_pbkdf2_password_hash_roundtrip_and_legacy_support(self):
+        encoded = hash_password("secret", salt="fixed-salt", iterations=1000)
+
+        self.assertTrue(encoded.startswith("pbkdf2_sha256$1000$fixed-salt$"))
+        self.assertTrue(verify_password("secret", encoded))
+        self.assertFalse(verify_password("wrong", encoded))
+        self.assertTrue(verify_password("secret", "sha256:2bb80d537b1da3e38bd30361aa855686bde0eacd7162fef6a25fe97bf527a25b"))
 
 
 class EnterpriseConfigTests(IsolatedRuntimeMixin, unittest.TestCase):

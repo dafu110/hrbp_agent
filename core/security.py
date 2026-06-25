@@ -41,15 +41,37 @@ def redact_payload(value: Any) -> Any:
     return value
 
 
-def hash_password(password: str) -> str:
-    return "sha256:" + hashlib.sha256(password.encode("utf-8")).hexdigest()
+PBKDF2_ITERATIONS = 260_000
+
+
+def hash_password(password: str, *, salt: str | None = None, iterations: int = PBKDF2_ITERATIONS) -> str:
+    salt = salt or secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), iterations).hex()
+    return f"pbkdf2_sha256${iterations}${salt}${digest}"
+
+
+def _verify_pbkdf2(input_password: str, expected_password: str) -> bool:
+    try:
+        _, iterations, salt, expected_digest = expected_password.split("$", 3)
+        actual = hashlib.pbkdf2_hmac(
+            "sha256",
+            input_password.encode("utf-8"),
+            salt.encode("utf-8"),
+            int(iterations),
+        ).hex()
+    except (ValueError, TypeError):
+        return False
+    return secrets.compare_digest(actual, expected_digest)
 
 
 def verify_password(input_password: str, expected_password: str | None) -> bool:
     if not expected_password:
         return True
+    if expected_password.startswith("pbkdf2_sha256$"):
+        return _verify_pbkdf2(input_password, expected_password)
     if expected_password.startswith("sha256:"):
-        return secrets.compare_digest(hash_password(input_password), expected_password)
+        legacy = "sha256:" + hashlib.sha256(input_password.encode("utf-8")).hexdigest()
+        return secrets.compare_digest(legacy, expected_password)
     return secrets.compare_digest(input_password, expected_password)
 
 

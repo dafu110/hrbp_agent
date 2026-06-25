@@ -34,6 +34,7 @@ class Settings:
     rag_top_k: int
     audit_log_max_bytes: int
     audit_hash_chain_enabled: bool
+    api_rate_limit_per_minute: int
     smtp_host: Optional[str]
     smtp_port: int
     smtp_username: Optional[str]
@@ -81,13 +82,18 @@ def enterprise_warnings(settings: Settings | None = None) -> list[str]:
     warnings: list[str] = []
     if settings.require_access_password and not settings.access_password:
         warnings.append("ACCESS_PASSWORD is required when REQUIRE_ACCESS_PASSWORD is enabled.")
-    if settings.access_password and not settings.access_password.startswith("sha256:"):
+    if settings.access_password and settings.access_password.startswith("sha256:"):
+        warnings.append("ACCESS_PASSWORD uses legacy sha256 hashing; prefer pbkdf2_sha256.")
+    if settings.access_password and not settings.access_password.startswith(("pbkdf2_sha256$", "sha256:")):
         if len(settings.access_password) < settings.access_password_min_length:
             warnings.append("ACCESS_PASSWORD is shorter than ACCESS_PASSWORD_MIN_LENGTH.")
+        warnings.append("ACCESS_PASSWORD is configured as plain text; prefer pbkdf2_sha256.")
     if settings.enterprise_mode and settings.tool_execution_mode == "live" and not settings.smtp_host:
         warnings.append("SMTP_HOST should be configured before enabling live tool execution.")
     if settings.enterprise_mode and not settings.audit_hash_chain_enabled:
         warnings.append("AUDIT_HASH_CHAIN_ENABLED should stay enabled in enterprise mode.")
+    if settings.enterprise_mode and settings.api_rate_limit_per_minute <= 0:
+        warnings.append("API_RATE_LIMIT_PER_MINUTE should be enabled in enterprise mode.")
     return warnings
 
 
@@ -122,6 +128,7 @@ def get_settings() -> Settings:
         rag_top_k=_int_env("RAG_TOP_K", 3),
         audit_log_max_bytes=_int_env("AUDIT_LOG_MAX_BYTES", 5_000_000),
         audit_hash_chain_enabled=_bool_env("AUDIT_HASH_CHAIN_ENABLED", True),
+        api_rate_limit_per_minute=_int_env("API_RATE_LIMIT_PER_MINUTE", 120),
         smtp_host=os.getenv("SMTP_HOST"),
         smtp_port=_int_env("SMTP_PORT", 587),
         smtp_username=os.getenv("SMTP_USERNAME"),
