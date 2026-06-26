@@ -9,6 +9,16 @@ from .security import verify_password
 class Principal:
     username: str
     role: str
+    tenant_id: str = "default"
+    org_id: str = "default-org"
+    department_id: str = "peopleops"
+
+    def scope(self) -> dict[str, str]:
+        return {
+            "tenant_id": self.tenant_id,
+            "org_id": self.org_id,
+            "department_id": self.department_id,
+        }
 
 
 ROLE_PERMISSIONS = {

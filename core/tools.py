@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 from .ats import LocalATSAdapter
 from .audit import write_audit_event
 from .config import get_settings
-from .database import create_interview_action
+from .database import create_approval_request, create_interview_action
 from .security import EMAIL_RE, redact_pii, stable_hash
 
 
@@ -220,6 +220,9 @@ def schedule_interview(
     *,
     candidate_email: Optional[str] = None,
     created_by: str = "local-admin",
+    tenant_id: str = "default",
+    org_id: str = "default-org",
+    department_id: str = "peopleops",
 ) -> ToolExecutionResult:
     settings = get_settings()
     mode = settings.tool_execution_mode.lower()
@@ -231,6 +234,7 @@ def schedule_interview(
     email_draft_path: Optional[Path] = None
     calendar_event_path: Optional[Path] = None
     ats_export_path: Optional[Path] = None
+    approval_request_id: Optional[int] = None
     smtp_status = "not_attempted"
     status = "DRY_RUN"
 
@@ -244,6 +248,9 @@ def schedule_interview(
             smtp_status = _send_email(candidate_name, interview_time, candidate_email)
 
     action_id = create_interview_action(
+        tenant_id=tenant_id,
+        org_id=org_id,
+        department_id=department_id,
         candidate_name=safe_candidate_name,
         interview_time=safe_interview_time,
         status=status,
@@ -251,10 +258,28 @@ def schedule_interview(
         calendar_event_path=calendar_event_path,
         created_by=created_by,
     )
+    if status == "PENDING_APPROVAL":
+        approval_request_id = create_approval_request(
+            tenant_id=tenant_id,
+            org_id=org_id,
+            department_id=department_id,
+            action_type="interview_invitation",
+            subject_ref=f"interview_action:{action_id}",
+            requested_by=created_by,
+            payload={
+                "candidate_ref": stable_hash(candidate_name),
+                "candidate_email": safe_candidate_email,
+                "interview_time": safe_interview_time,
+                "required_actions": list(settings.approval_required_actions),
+            },
+        )
     if mode in {"local", "live"}:
         ats_export_path = LocalATSAdapter().sync_interview_action(
             {
                 "action_id": action_id,
+                "tenant_id": tenant_id,
+                "org_id": org_id,
+                "department_id": department_id,
                 "candidate_name": safe_candidate_name,
                 "candidate_email": safe_candidate_email,
                 "interview_time": safe_interview_time,
@@ -279,6 +304,10 @@ def schedule_interview(
             "ats_export_path": str(ats_export_path) if ats_export_path else "dry_run",
             "smtp_status": smtp_status,
             "ats_record": "interview_actions",
+            "approval_request_id": approval_request_id or "not_required",
+            "tenant_id": tenant_id,
+            "org_id": org_id,
+            "department_id": department_id,
         },
     )
 
@@ -286,9 +315,13 @@ def schedule_interview(
         "tool.schedule_interview",
         {
             "candidate_ref": stable_hash(candidate_name),
+            "tenant_id": tenant_id,
+            "org_id": org_id,
+            "department_id": department_id,
             "interview_time": safe_interview_time,
             "candidate_email": safe_candidate_email,
             "execution_mode": mode,
+            "approval_request_id": approval_request_id,
             "smtp_status": smtp_status,
             "result": asdict(result),
         },

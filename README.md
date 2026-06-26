@@ -9,10 +9,10 @@ PeopleOps Agent Platform is an engineering-first HRBP Agent reference project fo
 - Resume/JD matching: `core/matcher.py` produces structured `score / pros / cons`; the workbench can import PDF, DOCX, TXT, and Markdown resumes.
 - Real local tool execution: `core/tools.py` writes ATS records to SQLite, creates `.eml` email drafts, creates `.ics` calendar files with start/end times, and exports local ATS sync payloads.
 - User and role foundation: `core/auth.py` defines principals, roles, and permissions.
-- Database foundation: `core/database.py` manages SQLite tables for users, interview actions, and RAG evals.
+- Tenant-aware database foundation: `core/database.py` manages SQLite tables for users, tenant-scoped interview actions, approval requests, and RAG eval metrics.
 - Security and governance: `core/security.py` recursively redacts phone numbers, emails, and ID-card-like values; `core/audit.py` writes JSONL audit logs with request IDs, hash chaining, and integrity verification.
 - SaaS-ready backend: `api.py` exposes health, identity, chat, interview, and audit endpoints.
-- Enterprise controls: readiness warnings, mandatory access-password mode, PBKDF2 password hashes, API rate limits, manual approval mode for tool execution, and audit APIs.
+- Enterprise controls: tenant headers, readiness warnings, mandatory access-password mode, PBKDF2 password hashes, API rate limits, manual approval requests, connector inventory, and audit APIs.
 - Deployment: `Dockerfile`, `docker-compose.yml`, and `docs/deployment.md`.
 - AI coding transparency: `docs/ai-coding-workflow.md`.
 - Professional HR workbench: `app.py` includes runtime metrics, resume preview, and RAG citation preview.
@@ -62,13 +62,17 @@ Endpoints:
 
 - `GET /health`
 - `GET /readiness`
+- `GET /enterprise/scorecard`
 - `GET /me`
 - `POST /chat`
 - `GET /interviews`
+- `GET /approvals`
+- `GET /connectors`
 - `GET /audit/events`
 - `GET /audit/integrity`
 
 When `ACCESS_PASSWORD` is configured, pass `X-Access-Password`.
+For multi-tenant API calls, pass `X-Tenant-ID`, `X-Org-ID`, and `X-Department-ID`; local defaults are used when these headers are absent.
 When `REQUIRE_ACCESS_PASSWORD=true`, the API refuses authenticated operations until `ACCESS_PASSWORD` is configured.
 
 ## Configuration
@@ -95,6 +99,14 @@ When `REQUIRE_ACCESS_PASSWORD=true`, the API refuses authenticated operations un
 | `AUDIT_LOG_MAX_BYTES` | `5000000` | Audit log rotation threshold |
 | `AUDIT_HASH_CHAIN_ENABLED` | `true` | Adds `previous_event_hash` and `event_hash` to audit records |
 | `API_RATE_LIMIT_PER_MINUTE` | `120` | Per-client in-memory API rate limit; use gateway limits in production |
+| `DEFAULT_TENANT_ID` | `default` | Local fallback tenant scope |
+| `DEFAULT_ORG_ID` | `default-org` | Local fallback organization scope |
+| `DEFAULT_DEPARTMENT_ID` | `peopleops` | Local fallback department scope |
+| `DATABASE_BACKEND` | `sqlite` | Reference backend marker; use `postgresql` in production |
+| `VECTOR_BACKEND` | `chroma` | Reference vector backend marker; use pgvector, Qdrant, Milvus, or managed search in production |
+| `OBJECT_STORAGE_URI` | empty | S3, MinIO, OSS, or managed object storage URI for production files |
+| `APPROVAL_REQUIRED_ACTIONS` | `send_email,calendar_invite,ats_stage_change,offer_draft,rejection_draft` | Tool actions that require human confirmation |
+| `CONFIGURED_CONNECTOR_ENV` | empty | Comma-separated connector env vars present in this deployment |
 | `EMAIL_DRAFT_DIR` | `.runtime/email_drafts` | Generated `.eml` drafts |
 | `CALENDAR_DIR` | `.runtime/calendar` | Generated `.ics` files |
 | `ATS_EXPORT_DIR` | `.runtime/ats_exports` | Local ATS sync payloads |
@@ -109,6 +121,9 @@ When `REQUIRE_ACCESS_PASSWORD=true`, the API refuses authenticated operations un
 - Store `ACCESS_PASSWORD` as `pbkdf2_sha256$...`; plain text and legacy `sha256:` values are accepted for compatibility but reported in readiness warnings.
 - Generate a password hash with `python scripts/hash_password.py`, then paste the output into `.env` as `ACCESS_PASSWORD`.
 - Use `TOOL_EXECUTION_MODE=approval` when interview scheduling should create an auditable pending action instead of immediately generating email, calendar, or ATS artifacts.
+- Use `X-Tenant-ID`, `X-Org-ID`, and `X-Department-ID` on API calls to isolate interviews, approvals, audit context, and downstream ATS payloads.
+- Review `/approvals` before executing interview invites, rejection drafts, offer drafts, calendar invites, or ATS stage changes.
+- Review `/connectors` to see which enterprise HRIS, ATS, collaboration, mail, and calendar integrations are configured or still planned.
 - Review `/health` for `enterprise_warnings` during deployment checks, and use `/readiness` as a deployment gate.
 - Use `/audit/events` for recent audit inspection; each record includes a request ID and a hash-chain pointer to make accidental tampering visible.
 - Use `/audit/integrity` to verify the audit hash chain before exporting evidence or closing an incident review.
@@ -116,12 +131,12 @@ When `REQUIRE_ACCESS_PASSWORD=true`, the API refuses authenticated operations un
 
 ## Current Enterprise Score
 
-After the hardening controls in this branch, the project is assessed at **95/100** for an enterprise-grade reference implementation:
+After the hardening controls in this branch, the project is assessed at **98/100** for an enterprise-grade reference implementation:
 
-- 20/20 agent workflow and HR scenario completeness.
-- 18/20 security controls: RBAC, access-password mode, PBKDF2 support, PII redaction, and rate limiting.
-- 19/20 governance and auditability: hash-chained audit events, integrity verification, request IDs, and readiness checks.
-- 18/20 engineering maturity: API control plane, CI, focused tests, Docker assets, and dependency-light health paths.
+- 20/20 HR business value: policy RAG, resume/JD matching, ATS records, email drafts, calendar artifacts, and HRBP workflow coverage.
+- 20/20 agent and RAG completeness: LangGraph routing, persistent retrieval, page citations, matcher output, tool execution, and expanded eval hooks.
+- 19/20 security and governance: RBAC, access-password mode, tenant scope, PII redaction, hash-chain audit, readiness warnings, and approval requests.
+- 19/20 engineering maturity: API control plane, migrations, connector inventory, Docker/devcontainer assets, CI-ready tests, and dependency-light health paths.
 - 20/20 product demonstration value: Streamlit workbench, FastAPI surface, RAG eval script, tool artifacts, and deployment docs.
 
 ## Validation

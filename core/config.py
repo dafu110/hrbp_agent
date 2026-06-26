@@ -41,6 +41,14 @@ class Settings:
     smtp_password: Optional[str]
     smtp_from: str
     smtp_use_tls: bool
+    default_tenant_id: str
+    default_org_id: str
+    default_department_id: str
+    database_backend: str
+    vector_backend: str
+    object_storage_uri: Optional[str]
+    approval_required_actions: tuple[str, ...]
+    configured_connector_env: tuple[str, ...]
 
     @property
     def has_llm_config(self) -> bool:
@@ -94,6 +102,14 @@ def enterprise_warnings(settings: Settings | None = None) -> list[str]:
         warnings.append("AUDIT_HASH_CHAIN_ENABLED should stay enabled in enterprise mode.")
     if settings.enterprise_mode and settings.api_rate_limit_per_minute <= 0:
         warnings.append("API_RATE_LIMIT_PER_MINUTE should be enabled in enterprise mode.")
+    if settings.enterprise_mode and settings.default_tenant_id == "default":
+        warnings.append("DEFAULT_TENANT_ID should be set to a real tenant slug in enterprise mode.")
+    if settings.enterprise_mode and settings.database_backend == "sqlite":
+        warnings.append("DATABASE_BACKEND=sqlite is for reference deployments; use PostgreSQL for production.")
+    if settings.enterprise_mode and settings.vector_backend == "chroma":
+        warnings.append("VECTOR_BACKEND=chroma is local-only; use pgvector, Qdrant, Milvus, or managed search for production.")
+    if settings.enterprise_mode and not settings.object_storage_uri:
+        warnings.append("OBJECT_STORAGE_URI should point to S3, MinIO, OSS, or another managed object store in enterprise mode.")
     return warnings
 
 
@@ -135,6 +151,22 @@ def get_settings() -> Settings:
         smtp_password=os.getenv("SMTP_PASSWORD"),
         smtp_from=os.getenv("SMTP_FROM", "hr@example.com"),
         smtp_use_tls=_bool_env("SMTP_USE_TLS", True),
+        default_tenant_id=os.getenv("DEFAULT_TENANT_ID", "default").strip() or "default",
+        default_org_id=os.getenv("DEFAULT_ORG_ID", "default-org").strip() or "default-org",
+        default_department_id=os.getenv("DEFAULT_DEPARTMENT_ID", "peopleops").strip() or "peopleops",
+        database_backend=os.getenv("DATABASE_BACKEND", "sqlite").strip().lower(),
+        vector_backend=os.getenv("VECTOR_BACKEND", "chroma").strip().lower(),
+        object_storage_uri=os.getenv("OBJECT_STORAGE_URI"),
+        approval_required_actions=tuple(
+            item.strip()
+            for item in os.getenv("APPROVAL_REQUIRED_ACTIONS", "send_email,calendar_invite,ats_stage_change,offer_draft,rejection_draft").split(",")
+            if item.strip()
+        ),
+        configured_connector_env=tuple(
+            item.strip()
+            for item in os.getenv("CONFIGURED_CONNECTOR_ENV", "").split(",")
+            if item.strip()
+        ),
     )
 
 

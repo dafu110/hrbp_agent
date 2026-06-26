@@ -13,18 +13,37 @@ from .security import redact_payload
 
 _request_id: contextvars.ContextVar[str | None] = contextvars.ContextVar("request_id", default=None)
 _actor: contextvars.ContextVar[str | None] = contextvars.ContextVar("actor", default=None)
+_tenant_id: contextvars.ContextVar[str | None] = contextvars.ContextVar("tenant_id", default=None)
+_org_id: contextvars.ContextVar[str | None] = contextvars.ContextVar("org_id", default=None)
+_department_id: contextvars.ContextVar[str | None] = contextvars.ContextVar("department_id", default=None)
 
 
-def set_audit_context(*, request_id: str | None = None, actor: str | None = None) -> None:
+def set_audit_context(
+    *,
+    request_id: str | None = None,
+    actor: str | None = None,
+    tenant_id: str | None = None,
+    org_id: str | None = None,
+    department_id: str | None = None,
+) -> None:
     if request_id is not None:
         _request_id.set(request_id)
     if actor is not None:
         _actor.set(actor)
+    if tenant_id is not None:
+        _tenant_id.set(tenant_id)
+    if org_id is not None:
+        _org_id.set(org_id)
+    if department_id is not None:
+        _department_id.set(department_id)
 
 
 def clear_audit_context() -> None:
     _request_id.set(None)
     _actor.set(None)
+    _tenant_id.set(None)
+    _org_id.set(None)
+    _department_id.set(None)
 
 
 def get_request_id() -> str | None:
@@ -71,6 +90,9 @@ def write_audit_event(event_type: str, payload: Dict[str, Any]) -> Dict[str, Any
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "request_id": get_request_id(),
         "actor": _actor.get(),
+        "tenant_id": _tenant_id.get(),
+        "org_id": _org_id.get(),
+        "department_id": _department_id.get(),
         "event_type": event_type,
         "payload": redact_payload(payload),
     }

@@ -9,11 +9,12 @@ from pathlib import Path
 from core.audit import read_audit_events, verify_audit_integrity, write_audit_event
 from core.auth import Principal, has_permission
 from core.config import enterprise_warnings, get_settings
-from core.database import list_interview_actions
+from core.database import list_approval_requests, list_interview_actions
 from core.matcher import normalize_analysis
 from core.pdf_utils import extract_document_text
 from core.security import hash_password, redact_payload, redact_pii, verify_password
 from core.tools import parse_interview_window, schedule_interview
+from core.tenancy import TenantContext
 
 
 class MatcherNormalizationTests(unittest.TestCase):
@@ -77,6 +78,14 @@ class IsolatedRuntimeMixin:
                 "ACCESS_PASSWORD_MIN_LENGTH",
                 "AUDIT_HASH_CHAIN_ENABLED",
                 "API_RATE_LIMIT_PER_MINUTE",
+                "DEFAULT_TENANT_ID",
+                "DEFAULT_ORG_ID",
+                "DEFAULT_DEPARTMENT_ID",
+                "DATABASE_BACKEND",
+                "VECTOR_BACKEND",
+                "OBJECT_STORAGE_URI",
+                "APPROVAL_REQUIRED_ACTIONS",
+                "CONFIGURED_CONNECTOR_ENV",
             )
         }
         root = Path(self._tmpdir.name)
@@ -92,6 +101,14 @@ class IsolatedRuntimeMixin:
         os.environ.pop("ACCESS_PASSWORD_MIN_LENGTH", None)
         os.environ.pop("AUDIT_HASH_CHAIN_ENABLED", None)
         os.environ.pop("API_RATE_LIMIT_PER_MINUTE", None)
+        os.environ.pop("DEFAULT_TENANT_ID", None)
+        os.environ.pop("DEFAULT_ORG_ID", None)
+        os.environ.pop("DEFAULT_DEPARTMENT_ID", None)
+        os.environ.pop("DATABASE_BACKEND", None)
+        os.environ.pop("VECTOR_BACKEND", None)
+        os.environ.pop("OBJECT_STORAGE_URI", None)
+        os.environ.pop("APPROVAL_REQUIRED_ACTIONS", None)
+        os.environ.pop("CONFIGURED_CONNECTOR_ENV", None)
         get_settings.cache_clear()
 
     def tearDown(self):
@@ -138,7 +155,22 @@ class ToolExecutionTests(IsolatedRuntimeMixin, unittest.TestCase):
         self.assertEqual(result.metadata["email_draft_path"], "dry_run")
         self.assertEqual(result.metadata["calendar_event_path"], "dry_run")
         self.assertEqual(result.metadata["ats_export_path"], "dry_run")
+        self.assertIsInstance(result.metadata["approval_request_id"], int)
         self.assertEqual(list_interview_actions(limit=1)[0]["status"], "PENDING_APPROVAL")
+        self.assertEqual(list_approval_requests(limit=1)[0]["status"], "PENDING")
+
+    def test_schedule_interview_records_tenant_scope(self):
+        result = schedule_interview(
+            "Carol",
+            "2026-06-22 11:00",
+            tenant_id="tenant-a",
+            org_id="org-a",
+            department_id="recruiting",
+        )
+
+        self.assertEqual(result.metadata["tenant_id"], "tenant-a")
+        self.assertEqual(list_interview_actions(limit=5, tenant_id="tenant-a")[0]["org_id"], "org-a")
+        self.assertEqual(list_interview_actions(limit=5, tenant_id="tenant-b"), [])
 
 
 class AuditTests(IsolatedRuntimeMixin, unittest.TestCase):
@@ -174,6 +206,22 @@ class AuthorizationTests(unittest.TestCase):
         self.assertFalse(has_permission(Principal("viewer", "viewer"), "tool"))
 
 
+class TenancyTests(unittest.TestCase):
+    def test_tenant_context_sanitizes_header_values(self):
+        scope = TenantContext.from_headers(
+            tenant_id=" tenant/a ",
+            org_id="org@main",
+            department_id="people ops",
+            default_tenant_id="default",
+            default_org_id="default-org",
+            default_department_id="peopleops",
+        )
+
+        self.assertEqual(scope.tenant_id, "tenanta")
+        self.assertEqual(scope.org_id, "orgmain")
+        self.assertEqual(scope.department_id, "peopleops")
+
+
 class ApiControlPlaneTests(IsolatedRuntimeMixin, unittest.TestCase):
     def test_health_and_audit_endpoints_do_not_require_agent_runtime(self):
         from fastapi.testclient import TestClient
@@ -184,6 +232,11 @@ class ApiControlPlaneTests(IsolatedRuntimeMixin, unittest.TestCase):
             health = client.get("/health")
             self.assertEqual(health.status_code, 200)
             self.assertEqual(health.json()["status"], "ok")
+            self.assertEqual(health.json()["database_backend"], "sqlite")
+
+            scorecard = client.get("/enterprise/scorecard")
+            self.assertEqual(scorecard.status_code, 200)
+            self.assertEqual(scorecard.json()["score"], 98)
 
             audit = client.get("/audit/events")
             self.assertEqual(audit.status_code, 200)
@@ -196,6 +249,14 @@ class ApiControlPlaneTests(IsolatedRuntimeMixin, unittest.TestCase):
             readiness = client.get("/readiness")
             self.assertEqual(readiness.status_code, 200)
             self.assertTrue(readiness.json()["ready"])
+
+            connectors = client.get("/connectors")
+            self.assertEqual(connectors.status_code, 200)
+            self.assertGreaterEqual(len(connectors.json()["connectors"]), 5)
+
+            me = client.get("/me", headers={"X-Tenant-ID": "tenant-a", "X-Org-ID": "org-a"})
+            self.assertEqual(me.status_code, 200)
+            self.assertEqual(me.json()["tenant_id"], "tenant-a")
 
     def test_chat_returns_service_error_when_agent_runtime_is_missing(self):
         from fastapi import HTTPException
@@ -262,6 +323,32 @@ class EnterpriseConfigTests(IsolatedRuntimeMixin, unittest.TestCase):
             "ACCESS_PASSWORD is required when REQUIRE_ACCESS_PASSWORD is enabled.",
             enterprise_warnings(),
         )
+
+    def test_enterprise_mode_warns_about_reference_backends(self):
+        os.environ["ENTERPRISE_MODE"] = "true"
+        os.environ["REQUIRE_ACCESS_PASSWORD"] = "false"
+        get_settings.cache_clear()
+
+        warnings = enterprise_warnings()
+
+        self.assertTrue(any("DATABASE_BACKEND=sqlite" in item for item in warnings))
+        self.assertTrue(any("VECTOR_BACKEND=chroma" in item for item in warnings))
+
+
+class RagEvaluationTests(unittest.TestCase):
+    def test_score_case_detects_pii_and_forbidden_terms(self):
+        from scripts.evaluate_rag import score_case
+
+        metrics = score_case(
+            "员工请假信息 test@example.com",
+            ["policy-page-1"],
+            ["请假"],
+            forbidden_terms=["test@example.com"],
+        )
+
+        self.assertFalse(metrics["passed"])
+        self.assertTrue(metrics["pii_leakage"])
+        self.assertEqual(metrics["forbidden_hits"], ["test@example.com"])
 
 
 if __name__ == "__main__":
