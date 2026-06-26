@@ -2,6 +2,28 @@
 
 PeopleOps Agent Platform is an engineering-first HRBP Agent reference project for AI-native HCM scenarios. It goes beyond a RAG demo: the app includes persistent retrieval, a LangGraph workflow, resume/JD matching, local ATS records, email draft generation, calendar artifacts, access control, audit logs, PII redaction, a FastAPI backend, Docker deployment files, RAG evaluation scripts, and enterprise hardening controls.
 
+## Visual Product Walkthrough
+
+The workbench now presents the project as an enterprise HR operations console rather than a generic chatbot. The visual direction is intentionally quiet, dense, and audit-oriented: paper-toned surfaces, ledger-like evidence rows, compact status pills, and operational metrics that help an interviewer understand the product in the first 30 seconds.
+
+### HRBP Operations Console
+
+![PeopleOps workbench overview](docs/screenshots/peopleops-workbench-overview.png)
+
+The first screen shows the core loop: candidate inputs on the left, enterprise readiness signals at the top, operating metrics in the middle, and the Agent workspace as the main surface.
+
+### Candidate Context Assembly
+
+![PeopleOps candidate context panel](docs/screenshots/peopleops-candidate-context.png)
+
+The sidebar is designed as a task assembly rail for resume upload, JD paste-in, policy citation preview, and runtime health checks. This keeps the HRBP flow focused before the Agent response is generated.
+
+### Governance Evidence
+
+![PeopleOps governance evidence](docs/screenshots/peopleops-governance-evidence.png)
+
+The governance tab makes the enterprise story visible: recent interview actions, approval queue state, and audit trail evidence are surfaced as first-class product areas instead of being hidden in logs.
+
 ## What It Demonstrates
 
 - AI Agent workflow: `core/workflow.py` routes requests to RAG, resume matching, or tools.
