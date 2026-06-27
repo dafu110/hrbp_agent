@@ -497,15 +497,13 @@ def render_workflow_loop(jd_input: str) -> dict:
         + "</div>",
         unsafe_allow_html=True,
     )
-    st.markdown(
-        '<div class="po-loop-grid">'
-        + "".join(
-            render_step(idx, step["title"], step["copy"], step["state"], step["tone"])
-            for idx, step in enumerate(snapshot["steps"], start=1)
-        )
-        + "</div>",
-        unsafe_allow_html=True,
-    )
+    step_cols = st.columns(4)
+    for idx, step in enumerate(snapshot["steps"], start=1):
+        with step_cols[idx - 1]:
+            st.markdown(
+                render_step(idx, step["title"], step["copy"], step["state"], step["tone"]),
+                unsafe_allow_html=True,
+            )
     st.markdown(
         f"""
         <div class="po-next-action">
