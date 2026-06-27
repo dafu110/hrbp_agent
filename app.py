@@ -193,19 +193,22 @@ st.markdown(
         color: var(--po-blue);
     }
     .po-step {
-        min-height: 112px;
+        height: 164px;
+        display: flex;
+        flex-direction: column;
         border: 1px solid var(--po-line);
         border-radius: var(--po-radius);
         background: #ffffff;
-        padding: 12px;
+        padding: 12px 12px 13px;
         box-shadow: var(--po-shadow);
+        overflow: hidden;
     }
     .po-step-top {
         display: flex;
         align-items: center;
         justify-content: space-between;
         gap: 8px;
-        margin-bottom: 9px;
+        margin-bottom: 8px;
     }
     .po-step-index {
         display: inline-flex;
@@ -229,20 +232,22 @@ st.markdown(
     .po-step-state.green { color: var(--po-green); }
     .po-step-state.amber { color: var(--po-amber); }
     .po-step-state.blue { color: var(--po-blue); }
-    .po-step-title {
-        margin: 0 0 6px;
+    .po-step .po-step-title {
+        margin: 6px 0 8px !important;
         color: var(--po-ink);
-        font-size: 14px;
+        font-size: 18px !important;
+        line-height: 1.22 !important;
         font-weight: 820;
     }
-    .po-step-copy {
+    .po-step .po-step-copy {
         margin: 0;
         color: var(--po-muted);
-        font-size: 13px;
+        font-size: 12px;
         line-height: 1.45;
+        overflow-wrap: anywhere;
     }
     .po-next-action {
-        margin: 8px 0 14px;
+        margin: 10px 0 14px;
         border-left: 3px solid var(--po-accent);
         border-radius: var(--po-radius);
         border-top: 1px solid var(--po-line);
@@ -699,7 +704,7 @@ def render_governance_summary(snapshot: dict) -> None:
         <div class="po-evidence-grid">
           <div class="po-evidence-item">
             <div class="po-evidence-value">{len(snapshot["interviews"])}</div>
-            <div class="po-evidence-label">Interview Actions</div>
+            <div class="po-evidence-label">Action Records</div>
           </div>
           <div class="po-evidence-item">
             <div class="po-evidence-value">{len(snapshot["pending_approvals"])}</div>
