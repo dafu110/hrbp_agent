@@ -8,6 +8,8 @@ The Streamlit workbench now follows an orange operations-console visual system a
 Assemble context -> Agent judgment -> Execute action -> Governance evidence
 ```
 
+![PeopleOps orange closed-loop workbench](docs/screenshots/peopleops-workbench-orange.png)
+
 ## Product Experience
 
 The app is organized around the daily flow of an HR operator.
@@ -50,6 +52,19 @@ Engineering services
   |-- email draft artifacts
   `-- calendar ICS artifacts
 ```
+
+## Project Map
+
+| Path | Purpose |
+| --- | --- |
+| `app.py` | Streamlit workbench and orange closed-loop UI. |
+| `api.py` | FastAPI control plane for chat, identity, readiness, interviews, approvals, connectors, and audit data. |
+| `core/` | Agent workflow, RAG, matcher, security, audit, tenancy, database, connectors, and tool execution modules. |
+| `data/` | Sample HR policy, resume, and JD documents used by the demo. |
+| `docs/` | Deployment notes, clean-install notes, AI coding workflow notes, and product screenshots. |
+| `evals/` | RAG evaluation dataset. |
+| `scripts/` | Utility scripts for password hashing and RAG evaluation. |
+| `tests/` | Unit tests for core behavior, API control plane, security, tenancy, and evaluation helpers. |
 
 ## Quick Start
 
@@ -147,12 +162,9 @@ When `REQUIRE_ACCESS_PASSWORD=true`, the API refuses authenticated operations un
 docker compose up --build
 ```
 
-## Interview Positioning
+## Repository Housekeeping
 
-This project is suitable for an AI Engineer Agent role because it demonstrates:
-
-- Python-based AI application development.
-- LLM/RAG/Agent workflow implementation.
-- AI-native HR product thinking.
-- Tool calling that creates real local business artifacts.
-- Engineering maturity across persistence, audit, redaction, API, and deployment surfaces.
+- The README references the current orange workbench screenshot at `docs/screenshots/peopleops-workbench-orange.png`.
+- Older walkthrough screenshots were removed after the UI refresh to avoid documenting stale visuals.
+- Python cache directories such as `__pycache__/` are ignored and should not be committed.
+- No duplicate project files were found outside Git metadata and generated caches during the latest cleanup pass.
